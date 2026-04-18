@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: py-setowire
+Version: 0.1.0
+Summary: Lightweight UDP P2P networking library
+Author: Victor
+License-Expression: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Internet
+Classifier: Topic :: Security :: Cryptography
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: cryptography
+Dynamic: license-file
+
 # Setowire - Python
 
 A lightweight P2P networking library built on UDP. No central servers, no brokers — peers find each other and communicate directly.
@@ -17,28 +35,25 @@ Most P2P libraries are either too heavy or too tied to a specific runtime. Setow
 - Python 3.11+
 - `cryptography` package (X25519 + ChaCha20-Poly1305)
 
-## Install
-
 ```bash
-pip install py-setowire
-```
+# Standard
+pip install cryptography
 
-```bash
 # Termux (Android)
 pkg install python
-pip install py-setowire
+pip install cryptography
 
 # Debian / Ubuntu
 sudo apt install python3 python3-pip
-pip install py-setowire
+pip install cryptography
 
 # Arch
 sudo pacman -S python python-pip
-pip install py-setowire
+pip install cryptography
 
 # macOS (Homebrew)
 brew install python
-pip install py-setowire
+pip install cryptography
 ```
 
 ---
@@ -67,8 +82,7 @@ framing.py     — packet fragmentation, jitter buffer, batch UDP sender
 dht_lib.py     — minimal DHT for decentralized topic-based discovery
 peer.py        — per-peer state: queues, congestion control, multipath
 swarm.py       — main class: discovery, mesh, relay, sync, gossip
-setowire/      — package entry point
-  __init__.py
+__init__.py    — entry point
 chat.py        — example terminal chat app
 ```
 
@@ -167,7 +181,6 @@ The session key derivation label is `p2p-v12-session`. The peer with the lexicog
 ## Chat example
 
 ```bash
-# From a cloned repo
 python -m chat <nick> [room]
 python -m chat alice myroom
 ```
