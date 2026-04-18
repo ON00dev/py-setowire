@@ -5,7 +5,7 @@ import os
 import sys
 import json as _json
 
-from swarm import Swarm
+from setowire import Swarm
 
 SEED_FILE = './identity.json'
 

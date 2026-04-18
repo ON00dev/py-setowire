@@ -1,0 +1,16 @@
+LICENSE
+README.md
+constants.py
+crypto.py
+dht_lib.py
+framing.py
+peer.py
+pyproject.toml
+structs.py
+swarm.py
+py_setowire.egg-info/PKG-INFO
+py_setowire.egg-info/SOURCES.txt
+py_setowire.egg-info/dependency_links.txt
+py_setowire.egg-info/requires.txt
+py_setowire.egg-info/top_level.txt
+setowire/__init__.py

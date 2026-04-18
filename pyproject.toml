@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-setowire"
+version = "0.1.0"
+description = "Lightweight UDP P2P networking library"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Victor" }]
+dependencies = ["cryptography"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet",
+  "Topic :: Security :: Cryptography",
+]
+
+[tool.setuptools]
+py-modules = [
+  "constants",
+  "crypto",
+  "dht_lib",
+  "framing",
+  "peer",
+  "structs",
+  "swarm",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["setowire*"]
