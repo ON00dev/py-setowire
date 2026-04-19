@@ -2,20 +2,30 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import sys
+import threading
 import json as _json
 
 from setowire import Swarm
 
-SEED_FILE = './identity.json'
+SEED_FILE_TEMPLATE = './identity.{nick}.json'
 
 
-def _load_or_create_seed() -> str:
-    if os.path.exists(SEED_FILE):
-        with open(SEED_FILE) as f:
+def _seed_file_for(nick: str) -> str:
+    safe = ''.join(ch for ch in nick if ch.isalnum() or ch in ('-', '_')).lower()
+    if not safe:
+        safe = 'default'
+    return SEED_FILE_TEMPLATE.format(nick=safe)
+
+
+def _load_or_create_seed(nick: str) -> str:
+    seed_file = _seed_file_for(nick)
+    if os.path.exists(seed_file):
+        with open(seed_file) as f:
             return json.load(f)['seed']
     seed = os.urandom(32).hex()
-    with open(SEED_FILE, 'w') as f:
+    with open(seed_file, 'w') as f:
         json.dump({'seed': seed}, f)
     return seed
 
@@ -43,7 +53,7 @@ async def main():
 
     nick = args[0]
     room = args[1] if len(args) > 1 else 'general'
-    seed = _load_or_create_seed()
+    seed = _load_or_create_seed(nick)
 
     swarm    = Swarm({'seed': seed})
     topic    = hashlib.sha256(f'chat:{room}'.encode()).digest()
@@ -55,8 +65,17 @@ async def main():
     swarm.on('nat',     lambda: _sys(f'nat={swarm.nat_type} addr={swarm.public_address or "LAN"}'))
     swarm.on('nattype', lambda: _sys(f'nat type refined: {swarm.nat_type}'))
 
+    def _send_join(peer):
+        try:
+            peer.write(json.dumps({'type': 'JOIN', 'nick': nick}).encode())
+        except Exception:
+            pass
+
     def on_connection(peer):
-        peer.write(json.dumps({'type': 'JOIN', 'nick': nick}).encode())
+        ev = asyncio.get_event_loop()
+        _send_join(peer)
+        ev.call_later(0.4, lambda p=peer: _send_join(p))
+        ev.call_later(1.2, lambda p=peer: _send_join(p))
 
     swarm.on('connection', on_connection)
 
@@ -76,10 +95,7 @@ async def main():
                 _sys(f"{m['nick']} joined")
             if peer.id not in handshook:
                 handshook.add(peer.id)
-                try:
-                    peer.write(json.dumps({'type': 'JOIN', 'nick': nick}).encode())
-                except Exception:
-                    pass
+                _send_join(peer)
             return
 
         if m.get('type') == 'MSG':
@@ -104,19 +120,29 @@ async def main():
     _sys(f'ready | nat={swarm.nat_type} | addr={swarm.public_address or "LAN"}')
 
     loop = asyncio.get_event_loop()
-    _main_task = asyncio.current_task()
+    shutdown = asyncio.Event()
     _quitting  = False
 
-    def _sigint_handler():
+    async def _shutdown():
         nonlocal _quitting
         if _quitting:
             return
         _quitting = True
         payload = json.dumps({'type': 'LEAVE', 'nick': nick}).encode()
         swarm.broadcast(payload)
-        loop.call_later(0.3, _main_task.cancel)
+        await asyncio.sleep(0.3)
+        try:
+            await swarm.destroy()
+        finally:
+            shutdown.set()
 
-    loop.add_signal_handler(__import__('signal').SIGINT, _sigint_handler)
+    def _sigint_handler():
+        asyncio.ensure_future(_shutdown())
+
+    try:
+        loop.add_signal_handler(signal.SIGINT, _sigint_handler)
+    except NotImplementedError:
+        signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(_sigint_handler))
 
     def _handle_input(line: str):
         text = line.strip()
@@ -134,13 +160,7 @@ async def main():
             return
 
         if text == '/quit':
-            payload = json.dumps({'type': 'LEAVE', 'nick': nick}).encode()
-            swarm.broadcast(payload)
-            async def _quit():
-                await asyncio.sleep(0.3)
-                await swarm.destroy()
-                sys.exit(0)
-            asyncio.ensure_future(_quit())
+            asyncio.ensure_future(_shutdown())
             return
 
         payload = json.dumps({'type': 'MSG', 'nick': nick, 'text': text, '_selfId': swarm._id}).encode()
@@ -152,23 +172,71 @@ async def main():
 
     loop.call_later(0.5, lambda: _sys('commands: /peers  /nat  /quit'))
 
-    reader = asyncio.StreamReader()
-    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    stdin_queue: asyncio.Queue[str | None] = asyncio.Queue()
+    stdin_stop = threading.Event()
+
+    def _start_stdin_thread():
+        def _run():
+            while not stdin_stop.is_set():
+                line = sys.stdin.readline()
+                if not line:
+                    loop.call_soon_threadsafe(stdin_queue.put_nowait, None)
+                    break
+                loop.call_soon_threadsafe(stdin_queue.put_nowait, line)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+    reader = None
+    if os.name == 'nt':
+        _start_stdin_thread()
+    else:
+        reader = asyncio.StreamReader()
+        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
 
     print(f'\x1b[32m{nick}\x1b[0m > ', end='', flush=True)
 
-    while True:
+    while not shutdown.is_set():
         try:
-            line = await reader.readline()
-            if not line:
-                break
-            _handle_input(line.decode())
+            if os.name == 'nt':
+                done, pending = await asyncio.wait(
+                    {asyncio.create_task(stdin_queue.get()), asyncio.create_task(shutdown.wait())},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+                finished = next(iter(done)).result()
+                if finished is True:
+                    break
+                line = finished
+                if line is None:
+                    break
+            else:
+                done, pending = await asyncio.wait(
+                    {asyncio.create_task(reader.readline()), asyncio.create_task(shutdown.wait())},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+                finished = next(iter(done)).result()
+                if finished is True:
+                    break
+                raw = finished
+                if not raw:
+                    break
+                line = raw.decode()
+
+            _handle_input(line)
             print(f'\x1b[32m{nick}\x1b[0m > ', end='', flush=True)
         except (EOFError, KeyboardInterrupt, asyncio.CancelledError):
             break
 
-    await swarm.destroy()
+    stdin_stop.set()
+    if not shutdown.is_set():
+        await _shutdown()
 
 
 if __name__ == '__main__':
+    if os.name == 'nt':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

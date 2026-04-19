@@ -35,25 +35,28 @@ Most P2P libraries are either too heavy or too tied to a specific runtime. Setow
 - Python 3.11+
 - `cryptography` package (X25519 + ChaCha20-Poly1305)
 
-```bash
-# Standard
-pip install cryptography
+## Install
 
+```bash
+pip install py-setowire
+```
+
+```bash
 # Termux (Android)
 pkg install python
-pip install cryptography
+pip install py-setowire
 
 # Debian / Ubuntu
 sudo apt install python3 python3-pip
-pip install cryptography
+pip install py-setowire
 
 # Arch
 sudo pacman -S python python-pip
-pip install cryptography
+pip install py-setowire
 
 # macOS (Homebrew)
 brew install python
-pip install cryptography
+pip install py-setowire
 ```
 
 ---
@@ -82,7 +85,8 @@ framing.py     — packet fragmentation, jitter buffer, batch UDP sender
 dht_lib.py     — minimal DHT for decentralized topic-based discovery
 peer.py        — per-peer state: queues, congestion control, multipath
 swarm.py       — main class: discovery, mesh, relay, sync, gossip
-__init__.py    — entry point
+setowire/      — package entry point
+  __init__.py
 chat.py        — example terminal chat app
 ```
 
@@ -181,6 +185,7 @@ The session key derivation label is `p2p-v12-session`. The peer with the lexicog
 ## Chat example
 
 ```bash
+# From a cloned repo
 python -m chat <nick> [room]
 python -m chat alice myroom
 ```

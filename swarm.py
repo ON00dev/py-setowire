@@ -128,6 +128,7 @@ class Swarm:
         self._topic_hash    = None
         self._dht           = None
         self._hb_handle     = None
+        self._stun_pending  = {}  # txn_id bytes -> handler fn
 
         self._loop = asyncio.get_event_loop()
         self._init_task = self._loop.create_task(self._init())
@@ -351,7 +352,7 @@ class Swarm:
                     start_relay()
 
             self.once('nat', on_nat)
-            self._loop.call_later(0.2, lambda: (start_relay() if not called and self.public_address else None))
+            self._loop.call_later(5.0, lambda: (start_relay() if not called else None))
 
         return self
 
@@ -411,21 +412,26 @@ class Swarm:
         async def attempt():
             if self._destroyed:
                 return
-            probes = [self._stun_probe(s, 3.0) for s in STUN_HOSTS]
-            done, _ = await asyncio.wait(
-                [self._loop.create_task(p) for p in probes],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            tasks = [self._loop.create_task(self._stun_probe(s, 3.0)) for s in STUN_HOSTS]
             first = None
-            for t in done:
-                result = t.result()
-                if result:
-                    first = result
-                    break
+            # Use as_completed pattern: resolve as soon as we get a valid result
+            pending = set(tasks)
+            while pending and first is None:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    try:
+                        result = t.result()
+                        if result and first is None:
+                            first = result
+                    except Exception:
+                        pass
+            # Cancel remaining tasks
+            for t in pending:
+                t.cancel()
             if first:
-                self._ext          = first
+                self._ext           = first
                 self.public_address = f'{first["ip"]}:{first["port"]}'
-                self.nat_type      = 'unknown'
+                self.nat_type       = 'unknown'
                 self._emit('nat')
                 self._loop.create_task(self._query_bootstrap_http())
                 self._start_bootstrap_announce()
@@ -439,11 +445,14 @@ class Swarm:
         req    = bytearray(20)
         struct.pack_into('>H', req, 0, 0x0001)
         struct.pack_into('>I', req, 4, 0x2112A442)
-        req[8:20] = os.urandom(12)
+        txn_id = os.urandom(12)
+        req[8:20] = txn_id
 
-        def handler(data, addr):
+        def handler(data):
             if len(data) < 20 or struct.unpack_from('>H', data, 0)[0] != 0x0101:
-                return
+                return False
+            if data[8:20] != txn_id:
+                return False
             length = struct.unpack_from('>H', data, 2)[0]
             off = 20
             while off + 4 <= 20 + length:
@@ -464,25 +473,25 @@ class Swarm:
                             fut.set_result({'ip': ip, 'port': port})
                     except Exception:
                         pass
-                    return
+                    return True
                 off += attr_len + (4 - attr_len % 4 if attr_len % 4 else 0)
+            return False
 
-        old_proto = self._transport.get_protocol()
-
-        class _StunHelper(asyncio.DatagramProtocol):
-            def datagram_received(self_, data, addr):
-                handler(data, addr)
-                old_proto.datagram_received(data, addr)
+        txn_key = bytes(txn_id)
+        self._stun_pending[txn_key] = handler
 
         try:
             self._transport.sendto(bytes(req), (server['host'], server['port']))
         except Exception:
+            self._stun_pending.pop(txn_key, None)
             return None
 
         try:
             return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
         except Exception:
             return None
+        finally:
+            self._stun_pending.pop(txn_key, None)
 
     def _init_lan(self):
         try:
@@ -532,6 +541,12 @@ class Swarm:
     def _recv(self, buf: bytes, addr: tuple):
         if len(buf) < 2:
             return
+        # STUN success response: type=0x0101, has 20-byte header with txn_id at [8:20]
+        if len(buf) >= 20 and struct.unpack_from('>H', buf, 0)[0] == 0x0101 and self._stun_pending:
+            txn_key = bytes(buf[8:20])
+            handler = self._stun_pending.get(txn_key)
+            if handler and handler(buf):
+                return
         src  = f'{addr[0]}:{addr[1]}'
         t    = buf[0]
 
@@ -635,7 +650,9 @@ class Swarm:
         peer              = Peer(self, pid, src)
         peer._their_pub_raw = their_pub_raw
         raw               = derive_session(self._my_x25519['private_key'], their_pub_raw)
-        i_am_lo           = self._id < pid
+        # Both sides use only the first 8 bytes (16 hex chars) of the ID on the wire,
+        # so the iAmLo comparison must use the same truncated ID to match JS behavior.
+        i_am_lo           = self._id[:16] < pid[:16]
         peer._session     = {
             'send_key':   raw['send_key']  if i_am_lo else raw['recv_key'],
             'recv_key':   raw['recv_key']  if i_am_lo else raw['send_key'],
